@@ -11,3 +11,43 @@ Encoding: UTF-8
 
 RnwWeave: Sweave
 LaTeX: pdfLaTeX
+nyc_data<-read.csv(file = "C:/Users/Tiange/Desktop/Capstone_Project/nyc_14.csv", header = T,sep=',')
+nyc_data_2016<--read.csv(file = "C:/Users/Tiange/Desktop/Capstone_Project/nyc_2016.csv", header = T,sep=',')
+str(nyc_data)
+head(nyc_data)
+library(sqldf)
+
+# to know how many distinct borough in this dataset and how many buildings in each borough
+unique_recordnumber<-sqldf("select count (distinct RecordNumber) from nyc_data")
+unique_borough<-sqldf("select distinct Borough from nyc_data")
+borough_buildings<-sqldf("select count (*), Borough from nyc_data group by Borough")
+property_type<-sqldf("select count (*),PrimaryPropertyType from nyc_data group by PrimaryPropertyType order by count(*) desc")
+#to make sure all record numbers are unique
+q<-unique(nyc_data[1])
+nrow(q) 
+
+library(ggplot2)
+
+as.numeric(nyc_data$Site.EUI..kBtu.ft2.)
+nyc_data$Site.EUI..kBtu.ft2.%>%stringr::str_extract_all("\\(?[0-9,.]+\\)?")%>%as.numeric()
+
+buildingtype_energy_consum<-sqldf("select count (SourceEUI..kBtu.ft2. ) as sumEui,median(SourceEUI..kBtu.ft2. ) as medianEUI,mean(SourceEUI..kBtu.ft2.) as MeanEUI from nyc_data group by PrimaryPropertyType")
+
+#conver factor to numeric
+nyc_data$SiteEUI..kBtu.ft2. [nyc_data$SiteEUI..kBtu.ft2. =="Not Available"]<- NA
+nyc_data$SiteEUI..kBtu.ft2. [nyc_data$SiteEUI..kBtu.ft2. =="See Primary BBL"]<- NA
+
+SiteEui_num <- as.numeric(gsub("[^.0-9]+","",nyc_data$SiteEUI..kBtu.ft2. ))
+# if you don't want missing value: nyc_data$SiteEui_num<-SiteEui_num[!is.na(SiteEui_num)]
+nyc_data$SiteEui_num<-SiteEui_num
+
+summary(nyc_data$SiteEui_num)
+
+#group buildings into siteEUI lower than 107 and higher than 107 since we have extremely siteEUI
+low_site_eui_buildings<-sqldf("select * from nyc_data where SiteEui_num<107")
+nrow(low_site_eui_buildings)
+boxplot(low_site_eui_buildings$SiteEui_num)
+
+library(ggplot2)
+siteEUI_interval<-cut(low_site_eui_buildings$SiteEui_num, breaks = seq(0,100,10))
+ggplot(low_site_eui_buildings,aes(x=siteEUI_interval))+geom_bar(aes(fill=PrimaryPropertyType))
