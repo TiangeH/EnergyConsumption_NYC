@@ -11,43 +11,207 @@ Encoding: UTF-8
 
 RnwWeave: Sweave
 LaTeX: pdfLaTeX
-nyc_data<-read.csv(file = "C:/Users/Tiange/Desktop/Capstone_Project/nyc_14.csv", header = T,sep=',')
+
+
+# the excel change data, copy and paste the plain in another sheet and then import to R
+nyc_data<-read.csv(file = "C:/Users/Tiange/Desktop/Capstone_Project/nyc_2014_raw.csv",header = T,sep=',')
 nyc_data_2016<--read.csv(file = "C:/Users/Tiange/Desktop/Capstone_Project/nyc_2016.csv", header = T,sep=',')
 str(nyc_data)
 head(nyc_data)
 library(sqldf)
+library(ggplot2)
+library(randoforest)
+library(xgboost)
+library(data.table)
 
-# to know how many distinct borough in this dataset and how many buildings in each borough
-unique_recordnumber<-sqldf("select count (distinct RecordNumber) from nyc_data")
-unique_borough<-sqldf("select distinct Borough from nyc_data")
-borough_buildings<-sqldf("select count (*), Borough from nyc_data group by Borough")
+#the original attribute name in R cause error message when using sqldf, we need to rename the attributes' name
+colnames(nyc_data)<-c("RecordNumber",
+                      "BBL",
+                      "Co_BBLStatus",
+                      "BBLsCo_reported",
+                      "BIN",
+                      "StreetNumber",
+                      "StreetName",
+                      "Borough",
+                      "ZipCode",
+                      "BBLontheCoveredBuildingsList",
+                      "DOFBenchmarkingSubmissionStatus",
+                      "SiteEUI_kBtu_ft2",
+                      "WeatherNormalizedSiteEUI_kBtu_ft2","SourceEUIkBtu_ft2",
+                      "WeatherNormalizedSourceEUIkBtu_ft2",
+                      "MunicipallySuppliedPotableWater_IndoorIntensity_gal_ft",
+                      "AutomaticWaterBenchmarkingEligible",
+                      "ReportedWaterMethod",
+                      "ENERGYSTARScore",
+                      "TotalGHGEmissions_MtCO2e",
+                      "DirectGHGEmissions_MtCO2e",
+                      "IndirectGHGEmissions_MtCO2e",
+                      "ReportedPropertyFloorArea_Buildings_ft",
+                      "DOFPropertyFloorArea_BuildngsandParking_ft2",
+                      "PrimaryPropertyType",
+                      "DOFNumberofBuildings")
+
+#3.because our goal is to get the most relevant features of energy score and do a prediction model, we need to understand our energy score first
+
+levels(nyc_data$ENERGYSTARScore)
+nrow(nyc_data[nyc_data$ENERGYSTARScore == "Not Available",])
+
+#We have 4985 rows of "Not Available" and 483 rows with "See Primary BBL".
+#we need to know if these rows contain other important information
+
+#we removed the EnergyStarScore with NA first because it may not help me on analysis at this moment, will use them later
+noscore<-sqldf('select* from nyc_data where ENERGYSTARScore == "Not Available"')
+noscore[ noscore == "Not Available" | noscore == "" ] <- NA
+na_count_row_noscore<- apply(noscore, 1, function(x) sum(is.na(x))) 
+
+
+library(sqldf)
+#remove those with In Violation because those rwos contains most missing value
+nyc_data<-sqldf("select * from nyc_data 
+                where DOFBenchmarkingSubmissionStatus != 'In Violation ' 
+                 and DOFBenchmarkingSubmissionStatus!= 'Not Applicable' 
+                 and ENERGYSTARScore != 'Not Available' 
+                 and ENERGYSTARScore!= '0'
+                 and ENERGYSTARScore!='See Primary BBL'
+                ")
+
+#we use the levels to check and found we still have the "Not Available", 
+#use which(nyc_data$ENERGYSTARScore =="Not Available" , arr.ind=TRUE)
+#to check and didn't find it, 
+which(nyc_data$ENERGYSTARScore =="Not Available" , arr.ind=TRUE)
+
+
+#we export the new nyc_data into excel, this step is just for myself learning. 
+library(xlsx)
+write.xlsx(nyc_data, "c:/Users/Tiange/Desktop/Capstone_Project/mm.xlsx")
+
+#in our data, we find that we have two categorical variables
+#borough and primary building type.
+important numerical attributes are as below, in the orginal dataframe. they were shown as factors, I want to convert them to numerical
+
+#change factor to numeric for further analysis, this step can be done by for loop. I will look into it later
+nyc_data$RecordNumber<-as.numeric(nyc_data$RecordNumber)
+nyc_data$SiteEUI_kBtu_ft2<-as.numeric(as.character(nyc_data$SiteEUI_kBtu_ft2))
+nyc_data$WeatherNormalizedSiteEUI_kBtu_ft2<-as.numeric(as.character(nyc_data$WeatherNormalizedSiteEUI_kBtu_ft2))
+nyc_data$SourceEUIkBtu_ft2<-as.numeric(as.character(nyc_data$SourceEUIkBtu_ft2))
+nyc_data$WeatherNormalizedSourceEUIkBtu_ft2<-as.numeric(as.character(nyc_data$WeatherNormalizedSourceEUIkBtu_ft2))
+nyc_data$MunicipallySuppliedPotableWater_IndoorIntensity_gal_ft<-as.numeric(as.character(nyc_data$MunicipallySuppliedPotableWater_IndoorIntensity_gal_ft))
+nyc_data$ENERGYSTARScore<-as.numeric(as.character(nyc_data$ENERGYSTARScore))
+nyc_data$TotalGHGEmissions_MtCO2e<-as.numeric(as.character(nyc_data$TotalGHGEmissions_MtCO2e))
+nyc_data$DirectGHGEmissions_MtCO2e<-as.numeric(as.character(nyc_data$DirectGHGEmissions_MtCO2e))
+nyc_data$IndirectGHGEmissions_MtCO2e<-as.numeric(as.character(nyc_data$IndirectGHGEmissions_MtCO2e))
+nyc_data$ReportedPropertyFloorArea_Buildings_ft<-as.numeric(as.character(nyc_data$ReportedPropertyFloorArea_Buildings_ft))
+nyc_data$DOFPropertyFloorArea_BuildngsandParking_ft2<-as.numeric(as.character(nyc_data$DOFPropertyFloorArea_BuildngsandParking_ft2))
+
+#check the distribution of EnergyScore
+hist(nyc_data$ENERGYSTARScore)
+
+#check the Borough
+table(nyc_data$Borough)
+#to visualize the categorial data and energy score,borough and building usage purpose
+library(ggplot2)
+ggplot(nyc_data) + geom_density(aes(x = ENERGYSTARScore, color =Borough))
+ggplot(nyc_data) + geom_density(aes(x = ENERGYSTARScore, fill =Borough), alpha = 0.2)
+
+#check the primary building type
+ggplot(nyc_data) + geom_density(aes(x = ENERGYSTARScore, fill =PrimaryPropertyType), alpha = 0.2)
+
+
+#for floor area, we have 2124 building have floor area larger than 166556ft2
+#6371 has floor area smaller than 166556
+ff<-nyc_data[(nyc_data[,23]>166556),]
+ff2<-nyc_data[(nyc_data[,23]<=166556),]  # for floor area under 166556 ft2, the distribution seems normal
+
+
+
+
+#as we can see, a lot attributes are highly correlated with each other. For example
+#siteEUi and WeatherNormalizedSiteEui.
+#https://portfoliomanager.zendesk.com/hc/en-us/articles/227118647-What-s-the-difference-between-Site-and-Source-Energy-
+#Based on the definition on BenchLaw84, siteEUI and weatherNormalizedSite EUI don't have huge difference for large size building.
+#Also, we have a lot missing values in WeatherNormalizeSiteEUI and WeatherNormalizedSouceEUI.
+#since then, we have two methods to deal with these.
+#1 method is remove WeaNormSour and WeaNorSit EUi form our frame
+#2 is replace missing vlaue in WeaNormSour and WeaNorSit by site and sourceEUI.
+
+cor.test(nyc_data$SiteEUI_kBtu_ft2,nyc_data$WeatherNormalizedSiteEUI_kBtu_ft2)
+#there is 99.99% correlation between SiteEUI and WeatherNormalizeSite EUI
+#if we use the summary or quantcut function, we can find that 1/3 of buildings
+#has site EUI larger than 107, we will seperate them and compare correlationship
+#between SiteEUI and WeatherNormalizedSiteEUI
+
+nn_l_107<-nyc_data[(nyc_data[,12]>107),]
+nn_s_107<-nyc_data[(nyc_data[,12]<=107),]
+
+plot(nn_s_107$SiteEUI_kBtu_ft2, nn_s_107$WeatherNormalizedSiteEUI_kBtu_ft2, main="SiteEUI&WeatherNormalizedSiteEui", 
+     xlab="SiteEUI ", 
+     ylab="WeatherNormalizedSiteEUI ",col=c("green","blue"), pch=19) 
+
+#we use the same method to do that with SourceEUI
+
+nn_l_107<-nyc_data[(nyc_data[,14]>107),]
+nn_s_107<-nyc_data[(nyc_data[,14]<=107),]
+
+plot(nn_s_107$SourceEUIkBtu_ft2, nn_s_107$WeatherNormalizedSourceEUIkBtu_ft2, main="SourceEUI&WeatherNormalizedSourceEui", 
+     xlab="SourceEUI ", 
+     ylab="WeatherNormalizedSourceEUI ",col=c("green","blue"), pch=19)
+
+#I chose the first method, remove WeatherNormalizedSiteEUI and WeatherNormalizedSourceEUI
+
+#then we compare SiteEUI and SourceEUI. 
+plot(nn_s_107$SiteEUI_kBtu_ft2, nn_s_107$SourceEUIkBtu_ft2, main="SiteEUI&SourceEui", 
+     xlab="SiteEUI ", 
+     ylab="SourceEUI ", pch=19)
+#After all these comparisions, we decide to keep only siteEUI.?? we may consider using sourceEUI because sourceEUI contains more information than siteEUI
+
+
+
+#only keep attributes that we need to use
+nn<-subset(nyc_data[,c(8,12,19,20,23,25)])
+#In the new data.frame nn, we only have 6 attribute, 2 of them are categories
+#borough, primary building type categorical
+#SiteEUI, EnergyStore, MunicipallySuppliedWaterIntensity,ReportedFloorArea
+
+ summary(nyc_data$MunicipallySuppliedPotableWater_IndoorIntensity_gal_ft)
+    Min.  1st Qu.   Median     Mean  3rd Qu.     Max.     NA's 
+    0.00    25.14    47.92   116.30    77.11 12208.21     5803 
+which(nyc_data$MunicipallySuppliedPotableWater_IndoorIntensity_gal_ft =="12208.21")
+[1] 1977
+
+
+
+#we have 5803 out of 8495 (around 68%) NA value in MunicipallySuppliedPotableWater_IndoorIntensity.
+#Municipally Supplied Potable Water-Indoor Intensity: The annual consumption of water in fallons per gross square foot of the property for the reporting year
+
+
+
 property_type<-sqldf("select count (*),PrimaryPropertyType from nyc_data group by PrimaryPropertyType order by count(*) desc")
-#to make sure all record numbers are unique
-q<-unique(nyc_data[1])
-nrow(q) 
+qq<-quantcut(nn$ENERGYSTARScore,q=6)
 
-library(ggplot2)
 
-as.numeric(nyc_data$Site.EUI..kBtu.ft2.)
-nyc_data$Site.EUI..kBtu.ft2.%>%stringr::str_extract_all("\\(?[0-9,.]+\\)?")%>%as.numeric()
+nn$ENERGYSTARScore[nn$ENERGYSTARScore>=1 & nn$ENERGYSTARScore <=19] <- "1"
+nn$ENERGYSTARScore[nn$ENERGYSTARScore>=20 & nn$ENERGYSTARScore <=42] <- "2"
+nn$ENERGYSTARScore[nn$ENERGYSTARScore>=43 & nn$ENERGYSTARScore <=59] <- "3"
+nn$ENERGYSTARScore[nn$ENERGYSTARScore>=60 & nn$ENERGYSTARScore <=74] <- "4"
+nn$ENERGYSTARScore[nn$ENERGYSTARScore>=75 & nn$ENERGYSTARScore <=88] <- "5"
+#nn$ENERGYSTARScore[nn$ENERGYSTARScore>88 & nn$ENERGYSTARScore <=101] <- "6"
+nn$ENERGYSTARScore[nn$ENERGYSTARScore %in% c("89","90","91","92","93","94","95","96","97","98","99","100")] <- "6"
 
-buildingtype_energy_consum<-sqldf("select count (SourceEUI..kBtu.ft2. ) as sumEui,median(SourceEUI..kBtu.ft2. ) as medianEUI,mean(SourceEUI..kBtu.ft2.) as MeanEUI from nyc_data group by PrimaryPropertyType")
+#there are some extremely value in Site EUI
+which(nn$SiteEUI_kBtu_ft2 =="10804120")
+#remove outlier first
+nn<-nn[-8263,]
+nn<-nn[-2017,]
 
-#conver factor to numeric
-nyc_data$SiteEUI..kBtu.ft2. [nyc_data$SiteEUI..kBtu.ft2. =="Not Available"]<- NA
-nyc_data$SiteEUI..kBtu.ft2. [nyc_data$SiteEUI..kBtu.ft2. =="See Primary BBL"]<- NA
+install.packages("xgboost")
+library(xgboost)
 
-SiteEui_num <- as.numeric(gsub("[^.0-9]+","",nyc_data$SiteEUI..kBtu.ft2. ))
-# if you don't want missing value: nyc_data$SiteEui_num<-SiteEui_num[!is.na(SiteEui_num)]
-nyc_data$SiteEui_num<-SiteEui_num
+dt = sort(sample(nrow(nn), nrow(nn)*.7))
+train_d<-nn[dt,]
+test_d<-nn[-dt,]
+dim(train_d)
+dim(test_d)
 
-summary(nyc_data$SiteEui_num)
 
-#group buildings into siteEUI lower than 107 and higher than 107 since we have extremely siteEUI
-low_site_eui_buildings<-sqldf("select * from nyc_data where SiteEui_num<107")
-nrow(low_site_eui_buildings)
-boxplot(low_site_eui_buildings$SiteEui_num)
 
-library(ggplot2)
-siteEUI_interval<-cut(low_site_eui_buildings$SiteEui_num, breaks = seq(0,100,10))
-ggplot(low_site_eui_buildings,aes(x=siteEUI_interval))+geom_bar(aes(fill=PrimaryPropertyType))
+
