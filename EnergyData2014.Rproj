@@ -170,8 +170,7 @@ plot(nn_s_107$SiteEUI_kBtu_ft2, nn_s_107$SourceEUIkBtu_ft2, main="SiteEUI&Source
 nn<-subset(nyc_data[,c(8,12,19,20,23,25)])
 #In the new data.frame nn, we only have 6 attribute, 2 of them are categories
 #borough, primary building type categorical
-#SiteEUI, EnergyStore, MunicipallySuppliedWaterIntensity,ReportedFloorArea
-
+#SiteEUI, EnergyStore, TotalGHGEmission
  summary(nyc_data$MunicipallySuppliedPotableWater_IndoorIntensity_gal_ft)
     Min.  1st Qu.   Median     Mean  3rd Qu.     Max.     NA's 
     0.00    25.14    47.92   116.30    77.11 12208.21     5803 
@@ -199,18 +198,34 @@ nn$ENERGYSTARScore[nn$ENERGYSTARScore %in% c("89","90","91","92","93","94","95",
 
 #there are some extremely value in Site EUI
 which(nn$SiteEUI_kBtu_ft2 =="10804120")
-#remove outlier first
-nn<-nn[-8263,]
-nn<-nn[-2017,]
 
 install.packages("xgboost")
 library(xgboost)
+
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x))) }
+prc_n <- as.data.frame(lapply(nn[2:4], normalize))
+
+#since we have some extremely data in SiteEUI, TotalGHGEmission and Floor area, we are going to remove these outliers
+
+boxplot(prc_n, main='Original Data')
+
+
+
+
+
+
+
+
+
+
 
 dt = sort(sample(nrow(nn), nrow(nn)*.7))
 train_d<-nn[dt,]
 test_d<-nn[-dt,]
 dim(train_d)
 dim(test_d)
+
 
 
 
