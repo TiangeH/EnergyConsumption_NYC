@@ -171,61 +171,57 @@ nn<-subset(nyc_data[,c(8,12,19,20,23,25)])
 #In the new data.frame nn, we only have 6 attribute, 2 of them are categories
 #borough, primary building type categorical
 #SiteEUI, EnergyStore, TotalGHGEmission
- summary(nyc_data$MunicipallySuppliedPotableWater_IndoorIntensity_gal_ft)
+#for MunicipallySuppliedPotableWaterIntensity
+
+summary(nyc_data$MunicipallySuppliedPotableWater_IndoorIntensity_gal_ft)
     Min.  1st Qu.   Median     Mean  3rd Qu.     Max.     NA's 
     0.00    25.14    47.92   116.30    77.11 12208.21     5803 
+
 which(nyc_data$MunicipallySuppliedPotableWater_IndoorIntensity_gal_ft =="12208.21")
 [1] 1977
+#we have 5803 out of 8495 (around 68%) NA value in MunicipallySuppliedPotableWater_IndoorIntensity, I decide to ignore this attribute for now
+#however, as in some data like Titantic, even they have only around 20% data, they still use the attributes. It depends on the importance of 
+#attributes
 
-
-
-#we have 5803 out of 8495 (around 68%) NA value in MunicipallySuppliedPotableWater_IndoorIntensity.
 #Municipally Supplied Potable Water-Indoor Intensity: The annual consumption of water in fallons per gross square foot of the property for the reporting year
 
+#as we checked earlier, we see a lot buildings with energy start score of 1 and a lot buildings with energy star score of 100. We will remove 
+#these and other outliers. 
+#The way I remove SiteEUI,TotalGHGEmission, ReportedPropertyFloorArea are remove the data lower than first quantile and higher than 3rd quantile
 
+nn<-sqldf("select Borough,SiteEUI_kBtu_ft2,
+          ENERGYSTARScore,
+          TotalGHGEmissions_MtCO2e,
+          ReportedPropertyFloorArea_Buildings_ft from nyc_data 
+          where
+          ENERGYSTARScore >1 and ENERGYSTARScore < 100
+          and SiteEUI_kBtu_ft2 >= 69 and SiteEUI_kBtu_ft2 <=152
+          and TotalGHGEmissions_MtCO2e >=370 and TotalGHGEmissions_MtCO2e <= 1313
+          and ReportedPropertyFloorArea_Buildings_ft >=67848 and ReportedPropertyFloorArea_Buildings_ft<= 502054")
 
-property_type<-sqldf("select count (*),PrimaryPropertyType from nyc_data group by PrimaryPropertyType order by count(*) desc")
 qq<-quantcut(nn$ENERGYSTARScore,q=6)
-
 
 nn$ENERGYSTARScore[nn$ENERGYSTARScore>=1 & nn$ENERGYSTARScore <=19] <- "1"
 nn$ENERGYSTARScore[nn$ENERGYSTARScore>=20 & nn$ENERGYSTARScore <=42] <- "2"
 nn$ENERGYSTARScore[nn$ENERGYSTARScore>=43 & nn$ENERGYSTARScore <=59] <- "3"
 nn$ENERGYSTARScore[nn$ENERGYSTARScore>=60 & nn$ENERGYSTARScore <=74] <- "4"
 nn$ENERGYSTARScore[nn$ENERGYSTARScore>=75 & nn$ENERGYSTARScore <=88] <- "5"
-#nn$ENERGYSTARScore[nn$ENERGYSTARScore>88 & nn$ENERGYSTARScore <=101] <- "6"
+#nn$ENERGYSTARScore[nn$ENERGYSTARScore>88 & nn$ENERGYSTARScore <=101] <- "6" # this step can't help me change the value
 nn$ENERGYSTARScore[nn$ENERGYSTARScore %in% c("89","90","91","92","93","94","95","96","97","98","99","100")] <- "6"
 
-#there are some extremely value in Site EUI
-which(nn$SiteEUI_kBtu_ft2 =="10804120")
-
-install.packages("xgboost")
-library(xgboost)
 
 normalize <- function(x) {
   return ((x - min(x)) / (max(x) - min(x))) }
 prc_n <- as.data.frame(lapply(nn[2:4], normalize))
 
-#since we have some extremely data in SiteEUI, TotalGHGEmission and Floor area, we are going to remove these outliers
-
-boxplot(prc_n, main='Original Data')
-
-
-
-
-
-
-
-
-
-
-
+#seperate training data and test data
 dt = sort(sample(nrow(nn), nrow(nn)*.7))
 train_d<-nn[dt,]
 test_d<-nn[-dt,]
 dim(train_d)
 dim(test_d)
 
+#random forest
 
 
 
