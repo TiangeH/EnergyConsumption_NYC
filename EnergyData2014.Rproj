@@ -55,7 +55,7 @@ colnames(nyc_data)<-c("RecordNumber",
                       "DOFPropertyFloorArea_BuildngsandParking_ft2",
                       "PrimaryPropertyType",
                       "DOFNumberofBuildings")
-                      
+
 #change factor to numeric for further analysis, this can be done by for loop to save time
 nyc_data$RecordNumber<-as.numeric(nyc_data$RecordNumber)
 nyc_data$SiteEUI_kBtu_ft2<-as.numeric(as.character(nyc_data$SiteEUI_kBtu_ft2))
@@ -70,10 +70,10 @@ nyc_data$IndirectGHGEmissions_MtCO2e<-as.numeric(as.character(nyc_data$IndirectG
 nyc_data$ReportedPropertyFloorArea_Buildings_ft<-as.numeric(as.character(nyc_data$ReportedPropertyFloorArea_Buildings_ft))
 nyc_data$DOFPropertyFloorArea_BuildngsandParking_ft2<-as.numeric(as.character(nyc_data$DOFPropertyFloorArea_BuildngsandParking_ft2))
 
-
+str(nyc_data)
 #3.because our goal is to get the most relevant features of energy score and do a prediction model, we need to understand our 
-   energy score first
-   
+energy score first
+
 hist(nyc_data$ENERGYSTARScore)
 
 #We have 4985 rows of "Not Available" and 483 rows with "See Primary BBL".
@@ -87,11 +87,12 @@ na_count_row_noscore<- apply(noscore, 1, function(x) sum(is.na(x)))
 #remove those with In Violation because those rwos contains most missing value
 nyc_data<-sqldf("select * from nyc_data 
                 where DOFBenchmarkingSubmissionStatus != 'In Violation ' 
-                 and DOFBenchmarkingSubmissionStatus!= 'Not Applicable' 
-                 and ENERGYSTARScore != 'Not Available' 
-                 and ENERGYSTARScore!= '0'
-                 and ENERGYSTARScore!='See Primary BBL'
+                and DOFBenchmarkingSubmissionStatus!= 'Not Applicable' 
+                and ENERGYSTARScore != 'Not Available' 
+                and ENERGYSTARScore!= '0'
+                and ENERGYSTARScore!='See Primary BBL'
                 ")
+nrow(nyc_data)
 #we use the levels to check and found we still have the "Not Available", 
 #use which(nyc_data$ENERGYSTARScore =="Not Available" , arr.ind=TRUE)
 #to check and didn't find it, 
@@ -137,8 +138,8 @@ cor.test(nyc_data$SiteEUI_kBtu_ft2,nyc_data$WeatherNormalizedSiteEUI_kBtu_ft2)
 
 nn_l_107<-nyc_data[(nyc_data[,14]>107),]
 nn_s_107<-nyc_data[(nyc_data[,14]<=107),]
- 
- plot(nn_s_107$SiteEUI_kBtu_ft2, nn_s_107$WeatherNormalizedSiteEUI_kBtu_ft2, main="SiteEUI&WeatherNormalizedSiteEui", 
+
+plot(nn_s_107$SiteEUI_kBtu_ft2, nn_s_107$WeatherNormalizedSiteEUI_kBtu_ft2, main="SiteEUI&WeatherNormalizedSiteEui", 
      xlab="SiteEUI ", 
      ylab="WeatherNormalizedSiteEUI ",col=c("green","blue"), pch=19) 
 
@@ -183,12 +184,14 @@ nn<-sqldf("select
 #study notes for how to subset certain value range from a data frame
 #rr_e<-subset(rr,rr$TotalGHGEmissions_MtCO2e >= 370 & rr$TotalGHGEmissions_MtCO2e <= 1313)
 
+str(nn)
+
 #scale data
 normalize <- function(x) {
   return ((x - min(x)) / (max(x) - min(x))) }
-prc_n <- as.data.frame(lapply(nn[2:5], normalize))
+prc_n <- as.data.frame(lapply(nn[1:4], normalize))
 
-boxplot(prc_n, main='Original Data')
+boxplot(prc_n, main='Normalized Data')
 
 #put energy start score into 6 different groups
 qq<-quantcut(nn$ENERGYSTARScore,q=6)
@@ -211,18 +214,21 @@ dim(train_d)
 dim(test_d)
 
 
-library(randomForest)
-
 output_forest <- randomForest(ENERGYSTARScore ~ SiteEUI_kBtu_ft2+
                                 TotalGHGEmissions_MtCO2e+
                                 ReportedPropertyFloorArea_Buildings_ft,
                               data = train_d,ntree=400, mtry=3,
                               importance=TRUE)
- 
+
 plot(output_forest)
 importance(output_forest) 
 pred <- predict(output_forest, newdata = test_d)
 table(pred, test_d$ENERGYSTARScore)
+
+
+
+
+
 
 
 
