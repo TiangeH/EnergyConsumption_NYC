@@ -1,0 +1,66 @@
+library(caret)
+
+nn_rf<-sqldf("select 
+          ENERGYSTARScore,
+                  SiteEUI_kBtu_ft2,
+                  TotalGHGEmissions_MtCO2e,
+                  ReportedPropertyFloorArea_Buildings_ft, 
+                  PrimaryPropertyType,
+                  Borough
+                  from nyc_data 
+                  where
+                  SiteEUI_kBtu_ft2 >= 70 and SiteEUI_kBtu_ft2 <=107
+                  and TotalGHGEmissions_MtCO2e >=369 and TotalGHGEmissions_MtCO2e <= 1006
+                  and ReportedPropertyFloorArea_Buildings_ft >=67870 and ReportedPropertyFloorArea_Buildings_ft<= 166503")
+
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x))) }
+prc_n_rf <- as.data.frame(lapply(nn_rf[1:4], normalize))
+
+#categorical data need to be converted to dummy
+nn_rf_PropertyUseType<-model.matrix(~PrimaryPropertyType-1,nn_rf)
+nn_rf_Borough<-model.matrix(~Borough-1,nn_rf)
+
+#right now, categorial data are matrix, need to convert them to data frame
+nn_rf_PropertyUseType<-data.frame(nn_rf_PropertyUseType)
+nn_rf_Borough<-data.frame(nn_rf_Borough)
+
+#then combine both categorial and numerical to one data frame nn_knn_c
+nn_rf_c<-cbind(prc_n_rf,nn_knn_PropertyUseType,nn_rf_Borough)
+head(nn_rf_c)
+
+#depedent variable need ot be factor, however, energystarscore is numeric and we have 100, need to 
+#reduce them to 4,quantcut function change them to facor with 4 levels
+nn_rf_c$ENERGYSTARScore<-quantcut(nn_rf_c$ENERGYSTARScore,4,labels=c("1","2","3","4"))
+
+#by using quantcut, we group energystarscore into 4 levels as factors
+
+
+dtrf = sort(sample(nrow(nn_rf_c), nrow(nn_rf_c)*.7))
+rf_train<-nn_rf_c[dtrf,]
+rf_validation<-nn_rf_c[-dtrf,]
+
+rf_train_labels <- nn_rf_c[dtrf, 1]
+rf_test_labels <- nn_rf_c[-dtrf, 1]
+
+output_forest <- randomForest(ENERGYSTARScore ~.,
+                              data = rf_train,ntree=400, mtry=64,
+                              importance=TRUE)
+output_forest
+
+
+plot(output_forest) 
+importance_rf<-importance(output_forest)
+write.xlsx(importance_rf, "c:/Users/Tiange/Desktop/Capstone_Project/importance_rf.xlsx")
+
+
+sort_imp_rf<-sort(varImpPlot(output_forest))
+
+pred_drf <- predict(output_forest, newdata = rf_validation)
+
+#1st way
+table(pred_drf, rf_validation$ENERGYSTARScore)
+plot(margin(output_forest,rf_validation$ENERGYSTARScore))
+#2nd way
+conf_matrix_rf <- table(pred_drf, rf_validation$ENERGYSTARScore)
+sum(diag(conf_matrix_rf))/nrow(rf_validation)
