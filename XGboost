@@ -1,0 +1,64 @@
+nn_xgboost<-sqldf("select 
+          ENERGYSTARScore,
+              SiteEUI_kBtu_ft2,
+              TotalGHGEmissions_MtCO2e,
+              ReportedPropertyFloorArea_Buildings_ft, 
+              PrimaryPropertyType,
+              Borough
+              from nyc_data 
+              where
+              SiteEUI_kBtu_ft2 >= 70 and SiteEUI_kBtu_ft2 <=107
+              and TotalGHGEmissions_MtCO2e >=369 and TotalGHGEmissions_MtCO2e <= 1006
+              and ReportedPropertyFloorArea_Buildings_ft >=67870 and ReportedPropertyFloorArea_Buildings_ft<= 166503")
+
+
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x))) }
+prc_n_xgboost <- as.data.frame(lapply(nn_xgboost[1:4], normalize))
+
+boxplot(prc_n_xgboost, main='Normalized Data')
+
+
+prc_n_xgboost$ENERGYSTARScore<-quantcut(prc_n_xgboost$ENERGYSTARScore,2,labels=c("0","1"))#in XGboost, only binary
+prc_n_xgboost$ENERGYSTARScore <- as.numeric(prc_n$ENERGYSTARScore)
+prc_n_xgboost$SiteEUI_kBtu_ft2<-quantcut(nn$SiteEUI_kBtu_ft2,4,labels=c("1","2","3","4"))
+prc_n_xgboost$TotalGHGEmissions_MtCO2e<-quantcut(nn$TotalGHGEmissions_MtCO2e,4,labels=c("1","2","3","4"))
+prc_n_xgboost$ReportedPropertyFloorArea_Buildings_ft<-quantcut(nn$ReportedPropertyFloorArea_Buildings_ft,4,labels=c("1","2","3","4"))
+
+#try xgboost
+#test if change to 0,1 model.matrix(~ENERGYSTARScore-1,head(nn))
+nn_ess<-model.matrix(~ENERGYSTARScore-1,prc_n_xgboost)
+nn_site<-model.matrix(~SiteEUI_kBtu_ft2-1,prc_n_xgboost)
+nn_GHG<-model.matrix(~TotalGHGEmissions_MtCO2e-1,prc_n_xgboost)
+nn_FloorArea<-model.matrix(~ReportedPropertyFloorArea_Buildings_ft-1,prc_n_xgboost)
+nn_PropertyUseType<-model.matrix(~PrimaryPropertyType-1,nn_xgboost)
+nn_Borough<-model.matrix(~Borough-1,nn_xgboost)
+
+
+nn_attributes <- cbind(nn_ess,nn_site, nn_GHG,nn_FloorArea,nn_PropertyUseType,nn_Borough)
+nn_matrix <- data.matrix(nn_attributes)
+
+EnergyLabel<-prc_n_xgboost$ENERGYSTARScore
+numberOfTrainingSamples <- round(length(EnergyLabel) * .7)
+train_data <- nn_matrix[1:numberOfTrainingSamples,]
+train_labels <- EnergyLabel[1:numberOfTrainingSamples]
+
+test_data <- nn_matrix[-(1:numberOfTrainingSamples),]
+test_labels <- EnergyLabel[-(1:numberOfTrainingSamples)]
+
+dtrain <- xgb.DMatrix(data = train_data, label= train_labels)
+dtest <- xgb.DMatrix(data = test_data, label= test_labels)
+
+model <- xgboost(data = dtrain, 
+                 nround = 4, # max number of boosting iterations
+                 objective = "binary:logistic")
+
+pred <- predict(model, dtest)
+err <- mean(as.numeric(pred > 0.5) != test_labels)
+print(paste("test-error=", err))
+
+
+importance_matrix <- xgb.importance(names(nn_matrix), model = model)
+
+
+xgb.plot.importance(importance_matrix)
