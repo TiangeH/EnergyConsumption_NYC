@@ -13,23 +13,23 @@ RnwWeave: Sweave
 LaTeX: pdfLaTeX
 
 #1.import data
-nyc_data_2016<-read.csv(file = "C:/Users/Tiange/Desktop/Capstone_Project/2016NYC.csv",header = T,sep=',')
 nyc_data<-read.csv(file = "C:/Users/Tiange/Desktop/Capstone_Project/nyc_2014_raw.csv",header = T,sep=',')
 
-#to see the data
-str(nyc_data)
-table(nyc_data$Borough)
-Summary(nyc_data)
-
-#2. install packages and rename the data since many attributes' name is not convenient for us to use
+#install packages and rename the data since many attributes' name is not convenient for us to use
 install.packages("gtools")#for quantcut function
 library(gtools) #for quantcut
 library(sqldf)
 library(ggplot2)
 library(randomForest)
 library(data.table)
+library(xgboost)
+library(xlsx) #export to excel
 
+#2 Data exploration and restructure
+str(nyc_data)
+nrow(nyc_data)
 
+#change column name etc
 colnames(nyc_data)<-c("RecordNumber",
                       "BBL",
                       "Co_BBLStatus",
@@ -56,7 +56,30 @@ colnames(nyc_data)<-c("RecordNumber",
                       "PrimaryPropertyType",
                       "DOFNumberofBuildings")
 
-#change factor to numeric for further analysis, this can be done by for loop to save time
+# since our goal is to predict Energy Star Score, we use summary to see what's inside Energy Star Score column. Some are "Not Available" or "See Primary BBL"
+questiondata<-sqldf("select * from nyc_data 
+                where ENERGYSTARScore = 'Not Available' 
+                or ENERGYSTARScore ='See Primary BBL'
+                ")
+
+questiondata[ questiondata == "Not Available" | questiondata == "" ] <- NA
+
+#checking missing value in each row and columns
+na_count_row_q<- apply(questiondata, 1, function(x) sum(is.na(x)))
+na_count_column_q<- apply(questiondata, 2, function(x) sum(is.na(x)))
+
+
+#remove those with In Violation because those rwos contains most missing value
+nyc_data<-sqldf("select * from nyc_data 
+                where DOFBenchmarkingSubmissionStatus != 'In Violation ' 
+                and DOFBenchmarkingSubmissionStatus!= 'Not Applicable' 
+                and ENERGYSTARScore != 'Not Available' 
+                and ENERGYSTARScore!= '0'
+                and ENERGYSTARScore!='See Primary BBL'
+                ")
+
+#convert factor to numerica, otherwise we can't do further analysis
+
 nyc_data$RecordNumber<-as.numeric(nyc_data$RecordNumber)
 nyc_data$SiteEUI_kBtu_ft2<-as.numeric(as.character(nyc_data$SiteEUI_kBtu_ft2))
 nyc_data$WeatherNormalizedSiteEUI_kBtu_ft2<-as.numeric(as.character(nyc_data$WeatherNormalizedSiteEUI_kBtu_ft2))
@@ -70,56 +93,33 @@ nyc_data$IndirectGHGEmissions_MtCO2e<-as.numeric(as.character(nyc_data$IndirectG
 nyc_data$ReportedPropertyFloorArea_Buildings_ft<-as.numeric(as.character(nyc_data$ReportedPropertyFloorArea_Buildings_ft))
 nyc_data$DOFPropertyFloorArea_BuildngsandParking_ft2<-as.numeric(as.character(nyc_data$DOFPropertyFloorArea_BuildngsandParking_ft2))
 
-str(nyc_data)
-#3.because our goal is to get the most relevant features of energy score and do a prediction model, we need to understand our 
-energy score first
+#make sure the change don't change numbers
+summary(nyc_data$ENERGYSTARScore)
+levels(nyc_data$ENERGYSTARScore)
 
-hist(nyc_data$ENERGYSTARScore)
-
-#We have 4985 rows of "Not Available" and 483 rows with "See Primary BBL".
-#we need to know if these rows contain other important information
-
-#create a data frame that EnergyStarScore is "Not Available" in case use later
-noscore<-sqldf('select* from nyc_data where ENERGYSTARScore == "Not Available"')
-noscore[ noscore == "Not Available" | noscore == "" ] <- NA
-na_count_row_noscore<- apply(noscore, 1, function(x) sum(is.na(x))) 
-
-#remove those with In Violation because those rwos contains most missing value
-nyc_data<-sqldf("select * from nyc_data 
-                where DOFBenchmarkingSubmissionStatus != 'In Violation ' 
-                and DOFBenchmarkingSubmissionStatus!= 'Not Applicable' 
-                and ENERGYSTARScore != 'Not Available' 
-                and ENERGYSTARScore!= '0'
-                and ENERGYSTARScore!='See Primary BBL'
-                ")
-nrow(nyc_data)
-#we use the levels to check and found we still have the "Not Available", 
-#use which(nyc_data$ENERGYSTARScore =="Not Available" , arr.ind=TRUE)
-#to check and didn't find it, 
-which(nyc_data$ENERGYSTARScore =="Not Available" , arr.ind=TRUE)
-
-#check the distribution of EnergyScore
-hist(nyc_data$ENERGYSTARScore)
-
-#in our data, we find that we have two categorical variables are important
-#borough and primary building type.
+#3 feature selections
 
 #check the Borough
 table(nyc_data$Borough)
-property_type<-sqldf("select count (*),PrimaryPropertyType from nyc_data group by PrimaryPropertyType order by count(*) desc")
-borough_tyoe<- sqldf("select count (*),Borough from nyc_data group by Borough order by count(*) desc")
-
-#to visualize the categorial data and energy score,borough and building usage purpose
-library(ggplot2)
-ggplot(nyc_data) + geom_density(aes(x = ENERGYSTARScore, color =Borough))
+#names are duplicated, replace them
+nyc_data$Borough[nyc_data$Borough == "QUEENS              "] <- "QUEENS"
 ggplot(nyc_data) + geom_density(aes(x = ENERGYSTARScore, fill =Borough), alpha = 0.2)
 
 #check the primary building type
 ggplot(nyc_data) + geom_density(aes(x = ENERGYSTARScore, fill =PrimaryPropertyType), alpha = 0.2)
 
+nyc_data<-subset(nyc_data,PrimaryPropertyType=="Multifamily Housing" 
+                 | PrimaryPropertyType == "Office"
+                 | PrimaryPropertyType == "Hotel"
+                 | PrimaryPropertyType == "Non-Refrigerated Warehouse"
+                 | PrimaryPropertyType == "Residence Hall/Dormitory"
+                 | PrimaryPropertyType == "Senior Care Community"
+                 | PrimaryPropertyType == "Retail Store" 
+                 | PrimaryPropertyType == "K-12 School" 
+                 | PrimaryPropertyType == "Distribution Center" 
+                 | PrimaryPropertyType == "Hospital (General Medical & Surgical)")
 
-
-#important numeric attributes are as below, in the orginal dataframe.
+#we decide to only keep the top 10 building usage in our data
 
 #as we can see, a lot attributes are highly correlated with each other. For example
 #siteEUi and WeatherNormalizedSiteEui.Based on the defiinition on BenchLaw84
@@ -127,8 +127,8 @@ ggplot(nyc_data) + geom_density(aes(x = ENERGYSTARScore, fill =PrimaryPropertyTy
 #however, it may not has huge effect for large size building. 
 #since then, we have two methods to deal with these.
 #As we checked, we have a lot missing WeatherNormalizedSite and WeatherNormalizedSourceEUI
-#1st method is remove WeaNormSour and WeaNorSit EUi form our frame
-#2nd is replace missing vlaue in WeaNormSour and WeaNorSit by site and sourceEUI.
+#1 method is remove WeaNormSour and WeaNorSit EUi form our frame
+#2 is replace missing vlaue in WeaNormSour and WeaNorSit by site and sourceEUI.
 
 cor.test(nyc_data$SiteEUI_kBtu_ft2,nyc_data$WeatherNormalizedSiteEUI_kBtu_ft2)
 #there is 99.99% correlation between SiteEUI and WeatherNormalizeSite EUI
@@ -136,30 +136,29 @@ cor.test(nyc_data$SiteEUI_kBtu_ft2,nyc_data$WeatherNormalizedSiteEUI_kBtu_ft2)
 #has site EUI larger than 107, we will seperate them and compare correlationship
 #between SiteEUI and WeatherNormalizedSiteEUI
 
-nn_l_107<-nyc_data[(nyc_data[,14]>107),]
-nn_s_107<-nyc_data[(nyc_data[,14]<=107),]
-
 plot(nn_s_107$SiteEUI_kBtu_ft2, nn_s_107$WeatherNormalizedSiteEUI_kBtu_ft2, main="SiteEUI&WeatherNormalizedSiteEui", 
      xlab="SiteEUI ", 
      ylab="WeatherNormalizedSiteEUI ",col=c("green","blue"), pch=19) 
+
+#we use the same method to do that with SourceEUI
+
+nn_l_107<-nyc_data[(nyc_data[,14]>107),]
+nn_s_107<-nyc_data[(nyc_data[,14]<=107),]
 
 plot(nn_s_107$SourceEUIkBtu_ft2, nn_s_107$WeatherNormalizedSourceEUIkBtu_ft2, main="SourceEUI&WeatherNormalizedSourceEui", 
      xlab="SourceEUI ", 
      ylab="WeatherNormalizedSourceEUI ",col=c("green","blue"), pch=19)
 
-#Since SiteEUI and WeatherNormalizedSiteEUI, SouceEUI and WeatherNormalizedSourceEUI are hight correlated. There are a lot missing values in 
-#WeatehrNormalizedSite/Souce EUI. I am going to keep SiteEUI and SourceEUI.
+#I chose the first method
 
 #then we compare SiteEUI and SourceEUI
 plot(nn_s_107$SiteEUI_kBtu_ft2, nn_s_107$SourceEUIkBtu_ft2, main="SiteEUI&SourceEui", 
      xlab="SiteEUI ", 
      ylab="SourceEUI ", pch=19)
 
-SourceEUI and SiteEUI also highly correlated, we will keep SiteEUI.
-
-#only keep attributes that we need to use
 
 
+# final step, only keep attributes that we need to use
 
 nn<-sqldf("select 
           ENERGYSTARScore,
@@ -170,65 +169,9 @@ nn<-sqldf("select
           Borough
           from nyc_data 
           where
-          ENERGYSTARScore >1 and ENERGYSTARScore < 100
-          and SiteEUI_kBtu_ft2 >= 69 and SiteEUI_kBtu_ft2 <=152
-          and TotalGHGEmissions_MtCO2e >=370 and TotalGHGEmissions_MtCO2e <= 1313
-          and ReportedPropertyFloorArea_Buildings_ft >=67848 and ReportedPropertyFloorArea_Buildings_ft<= 502054")
-
-#the value range is inside the 1st quantile and 3rd quantile of each attributes
-#In the new data.frame nn, we only have 6 attribute, 2 of them are categories
-#borough, primary building type categorical
-#SiteEUI, EnergyStore, MunicipallySuppliedWaterIntensity,ReportedFloorArea
-
-
-#study notes for how to subset certain value range from a data frame
-#rr_e<-subset(rr,rr$TotalGHGEmissions_MtCO2e >= 370 & rr$TotalGHGEmissions_MtCO2e <= 1313)
-
-str(nn)
-
-#scale data
-normalize <- function(x) {
-  return ((x - min(x)) / (max(x) - min(x))) }
-prc_n <- as.data.frame(lapply(nn[1:4], normalize))
-
-boxplot(prc_n, main='Normalized Data')
-
-#put energy start score into 6 different groups
-qq<-quantcut(nn$ENERGYSTARScore,q=6)
-
-nn$ENERGYSTARScore[nn$ENERGYSTARScore>=1 & nn$ENERGYSTARScore <=19] <- "1"
-nn$ENERGYSTARScore[nn$ENERGYSTARScore>=20 & nn$ENERGYSTARScore <=42] <- "2"
-nn$ENERGYSTARScore[nn$ENERGYSTARScore>=43 & nn$ENERGYSTARScore <=59] <- "3"
-nn$ENERGYSTARScore[nn$ENERGYSTARScore>=60 & nn$ENERGYSTARScore <=74] <- "4"
-nn$ENERGYSTARScore[nn$ENERGYSTARScore>=75 & nn$ENERGYSTARScore <=88] <- "5"
-#nn$ENERGYSTARScore[nn$ENERGYSTARScore>88 & nn$ENERGYSTARScore <=101] <- "6"
-nn$ENERGYSTARScore[nn$ENERGYSTARScore %in% c("89","90","91","92","93","94","95","96","97","98","99","100")] <- "6"
-
-
-nn$ENERGYSTARScore<-as.factor(nn$ENERGYSTARScore)
-
-dt = sort(sample(nrow(nn), nrow(nn)*.7))
-train_d<-nn[dt,]
-test_d<-nn[-dt,]
-dim(train_d)
-dim(test_d)
-
-
-output_forest <- randomForest(ENERGYSTARScore ~ SiteEUI_kBtu_ft2+
-                                TotalGHGEmissions_MtCO2e+
-                                ReportedPropertyFloorArea_Buildings_ft,
-                              data = train_d,ntree=400, mtry=3,
-                              importance=TRUE)
-
-plot(output_forest)
-importance(output_forest) 
-pred <- predict(output_forest, newdata = test_d)
-table(pred, test_d$ENERGYSTARScore)
-
-
-
-
-
+          and SiteEUI_kBtu_ft2 >= 70 and SiteEUI_kBtu_ft2 <=107
+          and TotalGHGEmissions_MtCO2e >=369 and TotalGHGEmissions_MtCO2e <= 1006
+          and ReportedPropertyFloorArea_Buildings_ft >=67870 and ReportedPropertyFloorArea_Buildings_ft<= 166503")
 
 
 
