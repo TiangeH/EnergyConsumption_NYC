@@ -1,0 +1,128 @@
+# helpful website from https://www3.nd.edu/~steve/computing_with_data/17_Refining_kNN/refining_knn.html
+
+install.packages("class")#for KNN
+library(class)
+library(gmodels)#to evaluate the performance of knn model
+library(plyr)
+
+nn_knn<-sqldf("select 
+          ENERGYSTARScore,
+          SiteEUI_kBtu_ft2,
+          TotalGHGEmissions_MtCO2e,
+          ReportedPropertyFloorArea_Buildings_ft, 
+          PrimaryPropertyType,
+          Borough
+          from nyc_data 
+          where
+          SiteEUI_kBtu_ft2 >= 70 and SiteEUI_kBtu_ft2 <=107
+          and TotalGHGEmissions_MtCO2e >=369 and TotalGHGEmissions_MtCO2e <= 1006
+          and ReportedPropertyFloorArea_Buildings_ft >=67870 and ReportedPropertyFloorArea_Buildings_ft<= 166503")
+
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x))) }
+prc_n <- as.data.frame(lapply(nn_knn[1:4], normalize))
+
+#for KNN you have to standize your data, also KNN is very sensitive to outliers
+#scaled_dat <- scale(nn_knn[,c(1:4)])
+#colMeans(scaled_dat)
+#apply(scaled_dat, 2, sd)
+#head(scaled_dat)
+
+#categorical data need to be converted to dummy
+nn_knn_PropertyUseType<-model.matrix(~PrimaryPropertyType-1,nn_knn)
+nn_knn_Borough<-model.matrix(~Borough-1,nn_knn)
+
+#right now, categorial data are matrix, need to convert them to data frame
+nn_knn_PropertyUseType<-data.frame(nn_knn_PropertyUseType)
+nn_knn_Borough<-data.frame(nn_knn_Borough)
+
+#then combine both categorial and numerical to one data frame nn_knn_c
+nn_knn_c<-cbind(prc_n,nn_knn_PropertyUseType,nn_knn_Borough)
+head(nn_knn_c)
+
+#depedent variable need ot be factor, however, energystarscore is numeric and we have 100, need to 
+#reduce them to 4,quantcut function change them to facor with 4 levels
+nn_knn_c$ENERGYSTARScore<-quantcut(nn_knn_c$ENERGYSTARScore,4,labels=c("1","2","3","4"))
+
+#by using quantcut, we group energystarscore into 4 levels as factors
+
+
+dt = sort(sample(nrow(nn_knn_c), nrow(nn_knn_c)*.7))
+knn_train<-nn_knn_c[dt,]
+knn_validation<-nn_knn_c[-dt,]
+
+knn_train_labels <- nn_knn_c[dt, 1]
+knn_test_labels <- nn_knn_c[-dt, 1]
+
+
+knn_test_pred <- knn(train = knn_train, test = knn_validation,cl = knn_train_labels, k=10)
+CrossTable(x=knn_test_labels,y=knn_test_pred,prop.chisq = F)
+
+
+#error message
+install.packages("Metrics")
+library(Metrics)
+mse(knn_train, knn_test_pred)
+#error message
+
+
+#improve the analysis
+
+names(knn_train)
+lm_1 <- lm(SiteEUI_kBtu_ft2 ~ knn_train_labels, data = knn_train<-nn_knn_c[dt,])
+summary(lm_1)
+summary(lm_1)$fstatistic
+summary(lm_1)$fstatistic[1]
+
+#do a loop to loop every variable
+
+knn_train$ENERGYSTARScore<-as.numeric(as.character(knn_train$ENERGYSTARScore))
+exp_vars <- names(knn_train)
+exp_var_fstat <- as.numeric(rep(NA, times = 65)) #??
+names(exp_var_fstat) <- names(exp_vars)
+
+#method below doesn't work, 
+for (j in 1:length(exp_vars)) {
+  exp_var_fstat[exp_vars[j]] <- summary(lm(as.formula(paste(exp_vars[j], " ~ knn_train_labels")), 
+                                           data = knn_train))$fstatistic[1]
+}
+
+for (j in 1:length(exp_vars)) {
+  exp_var_fstat[exp_vars[j]] <- summary(lm(exp_vars[j] ~ knn_train_labels, data = knn_train))$fstatistic[1]
+}
+
+#try another one
+exp_var_fstat2 <- sapply(exp_vars, function(x) {
+  summary(lm(as.formula(paste(x, " ~ knn_train_labels")), data = knn_train))$fstatistic[1]
+})
+
+exp_var_fstat2
+
+write.xlsx(exp_var_fstat2, "c:/Users/Tiange/Desktop/Capstone_Project/fstatsKNN.xlsx")
+
+wbcd_df_L <- lapply(exp_vars, function(x) {
+  df <- data.frame(sample = rownames(knn_train), variable = x, value = knn_train[, 
+                                                                                   x], class = knn_train_labels)
+  df
+})
+
+head(wbcd_df_L[[1]])
+
+names(wbcd_df_L) <- exp_vars
+
+var_sig_fstats <- laply(wbcd_df_L, function(df) {
+  fit <- lm(value ~ class, data = df)
+  f <- summary(fit)$fstatistic[1]
+  f
+})
+
+
+names(var_sig_fstats) <- names(wbcd_df_L)
+var_sig_fstats[1:4]
+
+most_sig_stats <- sort(var_sig_fstats, decreasing = T)
+most_sig_stats[1:5]#five most significant variables
+
+#cross validation
+
+
