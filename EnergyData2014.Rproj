@@ -15,6 +15,7 @@ LaTeX: pdfLaTeX
 #1.import data
 nyc_data<-read.csv(file = "C:/Users/Tiange/Desktop/Capstone_Project/nyc_2014_raw.csv",header = T,sep=',')
 
+nrow(nyc_data)
 #install packages and rename the data since many attributes' name is not convenient for us to use
 install.packages("gtools")#for quantcut function
 library(gtools) #for quantcut
@@ -56,19 +57,6 @@ colnames(nyc_data)<-c("RecordNumber",
                       "PrimaryPropertyType",
                       "DOFNumberofBuildings")
 
-# since our goal is to predict Energy Star Score, we use summary to see what's inside Energy Star Score column. Some are "Not Available" or "See Primary BBL"
-questiondata<-sqldf("select * from nyc_data 
-                where ENERGYSTARScore = 'Not Available' 
-                or ENERGYSTARScore ='See Primary BBL'
-                ")
-
-questiondata[ questiondata == "Not Available" | questiondata == "" ] <- NA
-
-#checking missing value in each row and columns
-na_count_row_q<- apply(questiondata, 1, function(x) sum(is.na(x)))
-na_count_column_q<- apply(questiondata, 2, function(x) sum(is.na(x)))
-
-
 #remove those with In Violation because those rwos contains most missing value
 nyc_data<-sqldf("select * from nyc_data 
                 where DOFBenchmarkingSubmissionStatus != 'In Violation ' 
@@ -77,6 +65,8 @@ nyc_data<-sqldf("select * from nyc_data
                 and ENERGYSTARScore!= '0'
                 and ENERGYSTARScore!='See Primary BBL'
                 ")
+
+
 
 #convert factor to numerica, otherwise we can't do further analysis
 
@@ -97,29 +87,25 @@ nyc_data$DOFPropertyFloorArea_BuildngsandParking_ft2<-as.numeric(as.character(ny
 summary(nyc_data$ENERGYSTARScore)
 levels(nyc_data$ENERGYSTARScore)
 
+
 #3 feature selections
 
 #check the Borough
-table(nyc_data$Borough)
-#names are duplicated, replace them
-nyc_data$Borough[nyc_data$Borough == "QUEENS              "] <- "QUEENS"
-ggplot(nyc_data) + geom_density(aes(x = ENERGYSTARScore, fill =Borough), alpha = 0.2)
+levels(nyc_data$Borough)
+tables(nyc_data$Borough)
 
-#check the primary building type
-ggplot(nyc_data) + geom_density(aes(x = ENERGYSTARScore, fill =PrimaryPropertyType), alpha = 0.2)
+nyc_data$Borough[nyc_data$Borough == "BRONX               "]<-"BRONX"
+nyc_data$Borough[nyc_data$Borough == "BROOKLYN            "]<-"BROOKLYN"
+nyc_data$Borough[nyc_data$Borough == "QUEENS              "]<-"QUEENS"
+nyc_data$Borough[nyc_data$Borough == "STATEN ISLAND       "]<-"STATEN ISLAND"
 
-nyc_data<-subset(nyc_data,PrimaryPropertyType=="Multifamily Housing" 
-                 | PrimaryPropertyType == "Office"
-                 | PrimaryPropertyType == "Hotel"
-                 | PrimaryPropertyType == "Non-Refrigerated Warehouse"
-                 | PrimaryPropertyType == "Residence Hall/Dormitory"
-                 | PrimaryPropertyType == "Senior Care Community"
-                 | PrimaryPropertyType == "Retail Store" 
-                 | PrimaryPropertyType == "K-12 School" 
-                 | PrimaryPropertyType == "Distribution Center" 
-                 | PrimaryPropertyType == "Hospital (General Medical & Surgical)")
+#facot Borough attributes, otherwise, will still be 9 levels instead of 5 levels
+nyc_data$Borough <- factor(nyc_data$Borough)
 
-#we decide to only keep the top 10 building usage in our data
+#remove those outliers
+nyc_data<-sqldf("select * from nyc_data 
+          where ENERGYSTARScore >1 and ENERGYSTARScore <100 ")
+
 
 #as we can see, a lot attributes are highly correlated with each other. For example
 #siteEUi and WeatherNormalizedSiteEui.Based on the defiinition on BenchLaw84
@@ -136,42 +122,243 @@ cor.test(nyc_data$SiteEUI_kBtu_ft2,nyc_data$WeatherNormalizedSiteEUI_kBtu_ft2)
 #has site EUI larger than 107, we will seperate them and compare correlationship
 #between SiteEUI and WeatherNormalizedSiteEUI
 
-plot(nn_s_107$SiteEUI_kBtu_ft2, nn_s_107$WeatherNormalizedSiteEUI_kBtu_ft2, main="SiteEUI&WeatherNormalizedSiteEui", 
-     xlab="SiteEUI ", 
-     ylab="WeatherNormalizedSiteEUI ",col=c("green","blue"), pch=19) 
 
-#we use the same method to do that with SourceEUI
+-----------------------------------------------------------------
 
-nn_l_107<-nyc_data[(nyc_data[,14]>107),]
-nn_s_107<-nyc_data[(nyc_data[,14]<=107),]
+property_type<-sqldf("select count (*),PrimaryPropertyType from nn group by PrimaryPropertyType order by count(*) desc")
 
-plot(nn_s_107$SourceEUIkBtu_ft2, nn_s_107$WeatherNormalizedSourceEUIkBtu_ft2, main="SourceEUI&WeatherNormalizedSourceEui", 
-     xlab="SourceEUI ", 
-     ylab="WeatherNormalizedSourceEUI ",col=c("green","blue"), pch=19)
-
-#I chose the first method
-
-#then we compare SiteEUI and SourceEUI
-plot(nn_s_107$SiteEUI_kBtu_ft2, nn_s_107$SourceEUIkBtu_ft2, main="SiteEUI&SourceEui", 
-     xlab="SiteEUI ", 
-     ylab="SourceEUI ", pch=19)
-
-
-
-# final step, only keep attributes that we need to use
-
+#use the building above 10
 nn<-sqldf("select 
           ENERGYSTARScore,
-          SiteEUI_kBtu_ft2,
+          SourceEUIkBtu_ft2,
           TotalGHGEmissions_MtCO2e,
           ReportedPropertyFloorArea_Buildings_ft, 
           PrimaryPropertyType,
           Borough
           from nyc_data 
           where
-          and SiteEUI_kBtu_ft2 >= 70 and SiteEUI_kBtu_ft2 <=107
-          and TotalGHGEmissions_MtCO2e >=369 and TotalGHGEmissions_MtCO2e <= 1006
-          and ReportedPropertyFloorArea_Buildings_ft >=67870 and ReportedPropertyFloorArea_Buildings_ft<= 166503")
+          SourceEUIkBtu_ft2 >= 106 and SourceEUIkBtu_ft2 <=169
+          and TotalGHGEmissions_MtCO2e <= 3703
+          and ReportedPropertyFloorArea_Buildings_ft< 600000")
+
+
+#1       3709            Multifamily Housing
+#2        291                         Office
+#3         27       Residence Hall/Dormitory
+#4         24                   Retail Store
+#5         23                    K-12 School
+#6         23     Non-Refrigerated Warehouse
+#7         15                          Hotel
+#8         14          Senior Care Community
+
+nn_data<-subset(nn,PrimaryPropertyType=="Multifamily Housing" 
+                 | PrimaryPropertyType == "Office"
+                 | PrimaryPropertyType == "Hotel"
+                 | PrimaryPropertyType == "Non-Refrigerated Warehouse"
+                 | PrimaryPropertyType == "Residence Hall/Dormitory"
+                 | PrimaryPropertyType == "Senior Care Community"
+                 | PrimaryPropertyType == "Retail Store" 
+                 | PrimaryPropertyType == "K-12 School")
+nn_data$PrimaryPropertyType <- factor(nn_data$PrimaryPropertyType)
+
+nn_data_PropertyUseType<-model.matrix(~PrimaryPropertyType-1,nn_data)
+nn_data_Borough<-model.matrix(~Borough-1,nn_data)
+
+#right now, categorial data are matrix, need to convert them to data frame
+nn_data_PropertyUseType<-data.frame(nn_data_PropertyUseType)
+nn_data_Borough<-data.frame(nn_data_Borough)
+
+#then combine both categorial and numerical to one data frame nn_knn_c
+nn_data<-cbind(nn_data[,c(1:4)],nn_data_PropertyUseType,nn_data_Borough)
+str(nn_data)
+
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x))) }
+
+
+nn_data[,1:4] <- as.data.frame(lapply(nn_data[1:4], normalize))
+
+
+
+
+
+--------------------------------------------------------------------------------------------
+#RANDOM FOREST
+
+dtrf = sort(sample(nrow(nn_data), nrow(nn_data)*.7))
+rf_train<-nn_data[dtrf,]
+rf_validation<-nn_data[-dtrf,]
+
+rf_train_labels <- nn_data[dtrf, 1]
+rf_test_labels <- nn_data[-dtrf, 1]
+
+#baseline for all model
+#https://www.r-bloggers.com/part-4a-modelling-predicting-the-amount-of-rain/
+best_guess<-mean(rf_train$ENERGYSTARScore)
+RMSE_Baseline<-sqrt(mean((best_guess-rf_validation$ENERGYSTARScore)^2))
+#0.2267699
+MAE_baseline <- mean(abs(best_guess-rf_validation$ENERGYSTARScore))
+#0.1895727
+set.seed(123)
+
+#Random Forest Model
+mtry <- sqrt(ncol(nn_data))
+
+output_forest <- randomForest(ENERGYSTARScore ~.,
+                              data = rf_train,ntree=500, mtry=4,
+                              importance=TRUE)
+
+output_forest
+importance(output_forest)
+which.min(output_forest$mse)
+
+varImpPlot(output_forest)
+plot(output_forest) 
+
+test_pred_forest <- predict(output_forest,rf_validation)
+RMSE_RF<-sqrt(mean((test_pred_forest-rf_validation$ENERGYSTARScore)^2))
+#0.146
+
+MAE_RF<-mean(abs(test_pred_forest-rf_validation$ENERGYSTARScore))
+#0.114
+
+
+#need cross validation and comparision
+rf_control <- trainControl(method="repeatedcv", number=10, repeats=3)
+seed <- 7
+set.seed(100)
+mtry <- sqrt(ncol(nn_data))
+ranf_CV <- train(ENERGYSTARScore~., data=rf_train, method="rf", metric=list("RMSE","MAE"), tuneLength=15, trControl=rf_control)
+
+sample <- sample.int(n = nrow(nn_data), size = floor(.50*nrow(nn_data)), replace = F)
+train <- nn_data[sample, ]
+test  <- nn_data[-sample, ]
+score = list()
+LOOCV_function = function(x,label){
+    +     for(i in 1:nrow(x)){
+      +         training = x[-i,]
+      +         model = 
+        +             validation = x[i,]
+        +         pred = predict(model, validation[,setdiff(names(validation),label)])
+        +         score[[i]] = rmse(pred, validation[[label]]) # score/error of ith fold
+        +     }
+    +     return(unlist(score)) # returns a vector
+    + }
+
+train_control <- trainControl(method="cv", number=10)
+model <- train(ENERGYSTARScore~., data=nn_data, trControl=train_control, method="rf")
+print(model)
+
+-----------------------------------------------------------------------------------------------------------
+  #knn method
+
+dt_knn = sort(sample(nrow(nn_data), nrow(nn_data)*.7))
+knn_train<-nn_data[dt_knn,]
+knn_validation<-nn_data[-dt_knn,]
+
+knn_train_labels <- nn_data[dt_knn, 1]
+knn_test_labels <- nn_data[-dt_knn, 1]
+
+
+knn_test_pred <- knn(train = knn_train, test = knn_validation,cl = knn_train_labels, k=9)
+test_pred_knn <- predict(knn_test_pred,knn_validation)
+
+MAE_knn<-mean(abs(test_pred_knn-knn_validation$ENERGYSTARScore))
+RMSE_knn<-sqrt(mean((test_pred_knn-knn_validation$ENERGYSTARScore)^2))
+
+#https://rpubs.com/mohitagr18/273075
+control <- trainControl(method='repeatedcv', number=10, repeats=3)
+metric <- 'RMSE'
+set.seed(101)
+fit_knn <- train(ENERGYSTARScore~., data=knn_train, method='knn', metric=metric, 
+            preProc=c('center', 'scale'), trControl=control)
+fit_knn <- train(ENERGYSTARScore~., data=nn_data, method='knn', metric=metric, 
+                 preProc=c('center', 'scale'), trControl=control)
+
+fit_knn
+
+knn_cv<-knn.cv(knn_train, knn_train_labels, k = 1, l = 0, prob = FALSE, use.all = TRUE)
+
+------------------------------------------------------------------------------------------------------------
+#xgboost
+
+  
+dtrf = sort(sample(nrow(nn_data), nrow(nn_data)*.7))
+xg_train<-nn_data[dtrf,]
+xg_validation<-nn_data[-dtrf,]
+
+dtrain <- xgb.DMatrix(data = as.matrix(xg_train[!names(xg_train) %in% c("ENERGYSTARScore")]), label = xg_train$ENERGYSTARScore)
+energy_xgb = xgboost(data=dtrain, max_depth=6, eta = 0.2, nthread=3, nrounds=40, lambda=0
+                     , objective="reg:linear")
+
+dtest <- as.matrix(xg_validation[!names(xg_train) %in% c("ENERGYSTARScore")])
+yhat_xgb <- predict(energy_xgb,dtest)
+round(mean((yhat_xgb - xg_validation)^2),2)  
+
+RMSE_xgboost<-sqrt(mean((yhat_xgb-xg_validation$ENERGYSTARScore)^2))
+#0.1515
+MAE_xgboost <- mean(abs(yhat_xgb-xg_validation$ENERGYSTARScore))
+#0.1167
+
+
+# below code are from https://rpubs.com/superseer/decision_trees_for_regression
+set.seed(1)
+param <- list("max_depth" = 3, "eta" = 0.2, "objective" = "reg:linear", "lambda" = 0)
+cv_nround <- 500
+cv_nfold <- 3
+energy_xgb_cv <- xgb.cv(param=param, data = dtrain, nfold = cv_nfold, nrounds=cv_nround,
+                        early_stopping_rounds = 200, # training will stop if performance doesn't improve for 200 rounds from the last best iteration
+                        verbose=0)
+#best iteration is 20
+dtrain <- xgb.DMatrix(data = as.matrix(xg_train[!names(xg_train) %in% c("ENERGYSTARScore")]), label = xg_train$ENERGYSTARScore)
+energy_xgb = xgboost(param=param, data=dtrain, nthread=3, nrounds=energy_xgb_cv$best_iteration, verbose=0)
+dtest <- as.matrix(xg_validation[!names(xg_train) %in% c("ENERGYSTARScore")])
+yhat_xgb <- predict(energy_xgb,dtest)
+round(mean((yhat_xgb - xg_validation)^2),2)
+
+ntrees <- energy_xgb_cv$best_iteration
+param_grid <- expand.grid(
+  nrounds = ntrees,
+  eta = seq(2,24,2)/ntrees,
+  #eta = c(0.1, 0.2, 0.3, 0.4, 0.5),
+  subsample = 1.0,
+  colsample_bytree = 1.0,
+  max_depth = c(1,2,3,4,5,6),
+  gamma = 1,
+  min_child_weight = 1
+)
+
+xgb_control <- trainControl(
+  method="cv",
+  number = 5
+)
+set.seed(1)
+energy_xgb_tuned <- train(ENERGYSTARScore~., data=xg_train, trControl=xgb_control, tuneGrid=param_grid,lambda=0, method="xgbTree")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
