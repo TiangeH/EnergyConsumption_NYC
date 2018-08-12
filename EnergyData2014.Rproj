@@ -122,12 +122,6 @@ cor.test(nyc_data$SiteEUI_kBtu_ft2,nyc_data$WeatherNormalizedSiteEUI_kBtu_ft2)
 #has site EUI larger than 107, we will seperate them and compare correlationship
 #between SiteEUI and WeatherNormalizedSiteEUI
 
-
------------------------------------------------------------------
-
-property_type<-sqldf("select count (*),PrimaryPropertyType from nn group by PrimaryPropertyType order by count(*) desc")
-
-#use the building above 10
 nn<-sqldf("select 
           ENERGYSTARScore,
           SourceEUIkBtu_ft2,
@@ -135,31 +129,15 @@ nn<-sqldf("select
           ReportedPropertyFloorArea_Buildings_ft, 
           PrimaryPropertyType,
           Borough
-          from nyc_data 
-          where
-          SourceEUIkBtu_ft2 >= 106 and SourceEUIkBtu_ft2 <=169
-          and TotalGHGEmissions_MtCO2e <= 3703
-          and ReportedPropertyFloorArea_Buildings_ft< 600000")
-
-
-#1       3709            Multifamily Housing
-#2        291                         Office
-#3         27       Residence Hall/Dormitory
-#4         24                   Retail Store
-#5         23                    K-12 School
-#6         23     Non-Refrigerated Warehouse
-#7         15                          Hotel
-#8         14          Senior Care Community
-
-nn_data<-subset(nn,PrimaryPropertyType=="Multifamily Housing" 
-                 | PrimaryPropertyType == "Office"
-                 | PrimaryPropertyType == "Hotel"
-                 | PrimaryPropertyType == "Non-Refrigerated Warehouse"
-                 | PrimaryPropertyType == "Residence Hall/Dormitory"
-                 | PrimaryPropertyType == "Senior Care Community"
-                 | PrimaryPropertyType == "Retail Store" 
-                 | PrimaryPropertyType == "K-12 School")
+          from nyc_data") 
+nn<-nn[-c(4864,5730),] #these two rows contain missing value
+nn_data<-nn  
 nn_data$PrimaryPropertyType <- factor(nn_data$PrimaryPropertyType)
+-----------------------------------------------------------------
+
+property_type<-sqldf("select count (*),PrimaryPropertyType from nn group by PrimaryPropertyType order by count(*) desc")
+
+
 
 nn_data_PropertyUseType<-model.matrix(~PrimaryPropertyType-1,nn_data)
 nn_data_Borough<-model.matrix(~Borough-1,nn_data)
@@ -195,59 +173,115 @@ rf_test_labels <- nn_data[-dtrf, 1]
 #baseline for all model
 #https://www.r-bloggers.com/part-4a-modelling-predicting-the-amount-of-rain/
 best_guess<-mean(rf_train$ENERGYSTARScore)
+#use the trainging, there will be a 
 RMSE_Baseline<-sqrt(mean((best_guess-rf_validation$ENERGYSTARScore)^2))
-#0.2267699
+#o.28 #0.2267699，27.70958
 MAE_baseline <- mean(abs(best_guess-rf_validation$ENERGYSTARScore))
-#0.1895727
+#0.24 #0.1895727  23.69592
 set.seed(123)
 
 #Random Forest Model
 mtry <- sqrt(ncol(nn_data))
 
 output_forest <- randomForest(ENERGYSTARScore ~.,
-                              data = rf_train,ntree=500, mtry=4,
+                              data = rf_train,ntree=120, mtry=13,
                               importance=TRUE)
 
 output_forest
-importance(output_forest)
-which.min(output_forest$mse)
 
+importance(output_forest)
 varImpPlot(output_forest)
 plot(output_forest) 
+which.min(output_forest$mse)
+sqrt(output_forest$mse[which.min(output_forest$mse)])
 
+
+#we should use the predicted value and actual value on testset instead of training set
+nn_data_test_residuals<-test_pred_forest-rf_validation$ENERGYSTARScore
+
+hist(nn_data_test_residuals)
+#this step is learned from http://uc-r.github.io/random_forests
+#we do cross validation on our training data
+
+valid_split <- initial_split(rf_train, .7)
+
+ames_train_v2 <- analysis(valid_split)
+
+ames_valid <- assessment(valid_split)
+
+x_test <- ames_valid[setdiff(names(ames_valid), "ENERGYSTARScore")]
+
+y_test <- ames_valid$ENERGYSTARScore
+
+rf_oob_comp <- randomForest(formula = ENERGYSTARScore ~ .,data= ames_train_v2,
+                            xtest   = x_test,ytest   = y_test)
+
+oob <- sqrt(rf_oob_comp$mse)
+validation <- sqrt(rf_oob_comp$test$mse)
+
+tibble::tibble(`Out of Bag Error` = oob,`Test error` = validation,ntrees = 1:rf_oob_comp$ntree
+) %>%gather(Metric, RMSE, -ntrees) %>%ggplot(aes(ntrees, RMSE, color = Metric)) +geom_line() +
+xlab("Number of trees")
+
+#then tune
+features <- setdiff(names(rf_train), "ENERGYSTARScore")
+m2 <- tuneRF(
+  x          = rf_train[features],
+  y          = rf_train$ENERGYSTARScore,
+  ntreeTry   =  ,
+  mtryStart  = 6,
+  stepFactor = 1.5,
+  improve    = 0.01,
+  trace      = FALSE)
+
+# m2
+#mtry   OOBError
+#4     4 0.02967727
+#6     6 0.02337338
+#9     9 0.02013521
+#13   13 0.01969575
+#19   19 0.01996363
+
+
+#check the performance of the model
 test_pred_forest <- predict(output_forest,rf_validation)
 RMSE_RF<-sqrt(mean((test_pred_forest-rf_validation$ENERGYSTARScore)^2))
-#0.146
-
+#mtry=2 0.1507 mtry=6 0.1522 after to mtry=13 0.139
 MAE_RF<-mean(abs(test_pred_forest-rf_validation$ENERGYSTARScore))
-#0.114
+#mtry=2 0.182 mtry=6 0.1207 after mtry=13 0. 102
+
+#to visualize
+plot(test_pred_forest,rf_validation$ENERGYSTARScore,xlab = "Predicted", ylab = "Actual",col="blue")
+grid()
+abline(0, 1, col = "darkorange", lwd = 2)
+
+#density plot
+plot(density(test_pred_forest),col="blue",lwd=2,main = "Predited and Actual Value")
+lines(density(rf_validation$ENERGYSTARScore),col="green",lwd=2)
+legend("topright",legend=c("test value","prediction"),pch=19, col=c("green","blue"))
 
 
-#need cross validation and comparision
-rf_control <- trainControl(method="repeatedcv", number=10, repeats=3)
-seed <- 7
-set.seed(100)
-mtry <- sqrt(ncol(nn_data))
-ranf_CV <- train(ENERGYSTARScore~., data=rf_train, method="rf", metric=list("RMSE","MAE"), tuneLength=15, trControl=rf_control)
+#feature importance using shapley value
+X = rf_validation[which(names(rf_validation) != "ENERGYSTARScore")]
+predictorr = Predictor$new(output_forest, data = X, y = rf_validation$ENERGYSTARScore)
+shapley = Shapley$new(predictorr, x.interest = X[1,])
+shapley$plot()
+output_forest
 
-sample <- sample.int(n = nrow(nn_data), size = floor(.50*nrow(nn_data)), replace = F)
-train <- nn_data[sample, ]
-test  <- nn_data[-sample, ]
-score = list()
-LOOCV_function = function(x,label){
-    +     for(i in 1:nrow(x)){
-      +         training = x[-i,]
-      +         model = 
-        +             validation = x[i,]
-        +         pred = predict(model, validation[,setdiff(names(validation),label)])
-        +         score[[i]] = rmse(pred, validation[[label]]) # score/error of ith fold
-        +     }
-    +     return(unlist(score)) # returns a vector
-    + }
 
-train_control <- trainControl(method="cv", number=10)
-model <- train(ENERGYSTARScore~., data=nn_data, trControl=train_control, method="rf")
-print(model)
+
+#shapeley value 
+dif<-test_pred_forest-rf_validation$ENERGYSTARScore
+test_Predicted<-test_pred_forest
+oo<-cbind(rf_validation$ENERGYSTARScore,test_Predicted,dif)
+oo<-as.data.frame(oo)
+
+
+which.max(oo$ll)#4020, 1582 on test
+subset(rf_validation[1582,])
+shapley = Shapley$new(predictorr, x.interest = X[1582,])
+plot(shapley)
+
 
 -----------------------------------------------------------------------------------------------------------
   #knn method
